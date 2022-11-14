@@ -18,10 +18,11 @@ fn main() {
         println!("Connection established!");
         /* Comment out lines 20 and 23 to make the server singlethreaded */
         pool.execute(|| {
-            println!("Thread spawned.");
             handle_connection(stream);
         });
     } // when stream is dropped, the connection is closed
+
+    println!("Shutting down.");
 }
 
 pub fn handle_connection(mut stream: TcpStream) {

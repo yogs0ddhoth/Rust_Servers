@@ -1,7 +1,12 @@
 use std::{
     sync::{
-        mpsc::{self, Receiver, Sender},
-        Arc, Mutex,
+        mpsc::{
+            self, 
+            Receiver, 
+            Sender
+        },
+        Arc, 
+        Mutex,
     },
     thread,
 };
@@ -11,7 +16,7 @@ type Job = Box<dyn FnOnce() + Send + 'static>; // type alias to send closures to
 /// # ThreadPool
 pub struct ThreadPool {
     workers: Vec<Worker>,
-    sender: Sender<Job>,
+    sender: Option<Sender<Job>>,
 }
 impl ThreadPool {
     /// # Constructor Method
@@ -32,7 +37,7 @@ impl ThreadPool {
             workers.push(Worker::new(id, Arc::clone(&receiver)));
         }
 
-        ThreadPool { workers, sender }
+        ThreadPool { workers, sender: Some(sender) }
     }
 
     pub fn execute<F>(&self, f: F)
@@ -40,26 +45,52 @@ impl ThreadPool {
         F: FnOnce() + Send + 'static,
     {
         self.sender
+            .as_ref()
+            .unwrap()
             .send(Box::new(f)) // wrap the method f in a Box (aliased as a Job) and send it down the channel
             .unwrap();
+    }
+}
+impl Drop for ThreadPool {
+    /* Cleanup */
+    fn drop(&mut self) {
+        drop(self.sender.take()); // drop the sender
+
+        for worker in &mut self.workers {
+            println!("Shutting down worker {}", worker.id);
+            
+            // destructure and join the threads
+            if let Some(thread) = worker.thread.take() {
+                thread.join().unwrap();
+            }
+        }
     }
 }
 
 struct Worker {
     id: usize,
-    thread: thread::JoinHandle<()>,
+    thread: Option<thread::JoinHandle<()>>,
 }
 impl Worker {
     fn new(id: usize, receiver: Arc<Mutex<Receiver<Job>>>) -> Worker {
         Worker {
             id,
-            thread: thread::spawn(move || loop {
-                let job = receiver.lock().unwrap().recv().unwrap(); // attempt to wait for a message from the sender
-
-                println!("Worker {id} got a job; executing.");
-
-                job();
-            }), // NOTE in a production build, thread::Builder, which returns a Result would be preferable
+            thread: Some(
+                thread::spawn(move || loop {
+                    let message = receiver.lock().unwrap().recv(); // attempt to wait for a message from the sender, temporary values, like the lock, are dropped when the let statement ends
+                    match message {
+                        Ok(job) => {
+                            println!("Worker {id} got a job; executing.");
+    
+                            job();
+                        }
+                        Err(_) => {
+                            println!("Worker {id} disconnected; shutting down.");
+                            break;
+                        }
+                    }
+                }) // NOTE in a production build, thread::Builder, which returns a Result would be preferable
+            )
         }
     }
 }
