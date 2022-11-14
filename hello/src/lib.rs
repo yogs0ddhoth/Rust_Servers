@@ -1,50 +1,65 @@
 use std::{
-    fs,
-    io::{prelude::*, BufReader}, // enable reading and writing to the TcpStream
-    net::TcpStream,
+    sync::{
+        mpsc::{self, Receiver, Sender},
+        Arc, Mutex,
+    },
+    thread,
 };
 
-///
-pub fn handle_connection(mut stream: TcpStream) {
-    let buf_reader = BufReader::new(&mut stream); // add buffering to the reader, improves the speed of small and repeated read calls to the same file or network socket.
+type Job = Box<dyn FnOnce() + Send + 'static>; // type alias to send closures to threads
 
-    /* parse the stream into a vector of strings
-     ** NOTE, all instances of unwrap() should be replaced with proper error handling in production code
-     */
-    let http_request: Vec<_> = buf_reader // take the buffer
-        .lines() // return an iterator over the lines
-        .map(|result| result.unwrap()) // get each string, return an error if data isn't UFT-8
-        .take_while(|line| !line.is_empty()) // filter out empty lines
-        .collect();
+/// # ThreadPool
+pub struct ThreadPool {
+    workers: Vec<Worker>,
+    sender: Sender<Job>,
+}
+impl ThreadPool {
+    /// # Constructor Method
+    ///
+    /// create a thread pool with the specified number of threads in it
+    ///
+    /// # Panics
+    /// size must be larger than 0
+    pub fn new(size: usize) -> ThreadPool {
+        assert!(size > 0);
 
-    println!("Request: {:#?}", http_request);
+        let (sender, receiver) = mpsc::channel(); // create a channel
+        let receiver = Arc::new(Mutex::new(receiver)); // wrap the receiver in Arc<Mutex<T>> to allow multiple threads to safely use the receiver
 
-    let (status_line, file_name) = if http_request[0] == "GET / HTTP/1.1" {
-        ("HTTP/1.1 200 OK", "public/index.html")
-    } else {
-        ("HTTP/1.1 404 NOT FOUND", "public/404.html")
-    };
+        /* create and store as many workers as specified in params, each with a receiver */
+        let mut workers = Vec::with_capacity(size);
+        for id in 0..size {
+            workers.push(Worker::new(id, Arc::clone(&receiver)));
+        }
 
-    let contents = fs::read_to_string(file_name).unwrap(); // does what it says on the box
-    let length = contents.len();
+        ThreadPool { workers, sender }
+    }
 
-    /* response follows:
-        HTTP-Version Status-Code Reason-Phrase CRLF
-        headers CRLF
-        message-body
-    */
-    let response = format!("{status_line}\r\nContent-Length: {length}\r\n\r\n{contents}");
-    stream
-        .write_all(response.as_bytes()) // convert response to bytes and send down the connection
-        .unwrap()
+    pub fn execute<F>(&self, f: F)
+    where
+        F: FnOnce() + Send + 'static,
+    {
+        self.sender
+            .send(Box::new(f)) // wrap the method f in a Box (aliased as a Job) and send it down the channel
+            .unwrap();
+    }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+struct Worker {
+    id: usize,
+    thread: thread::JoinHandle<()>,
+}
+impl Worker {
+    fn new(id: usize, receiver: Arc<Mutex<Receiver<Job>>>) -> Worker {
+        Worker {
+            id,
+            thread: thread::spawn(move || loop {
+                let job = receiver.lock().unwrap().recv().unwrap(); // attempt to wait for a message from the sender
 
-    #[test]
-    fn read_file_works() {
-        println!("{:?}", fs::read_to_string("public/index.html").unwrap())
+                println!("Worker {id} got a job; executing.");
+
+                job();
+            }), // NOTE in a production build, thread::Builder, which returns a Result would be preferable
+        }
     }
 }
