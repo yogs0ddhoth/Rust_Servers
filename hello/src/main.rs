@@ -1,5 +1,5 @@
-use std::net::TcpListener; // The std::net module provides networking functionality for TCP 
 use hello::handle_connection;
+use std::net::TcpListener; // The std::net module provides networking functionality for TCP
 
 fn main() {
     let listener = TcpListener::bind("127.0.0.1:7878") // bind an instance of TcpListener to port 7878
