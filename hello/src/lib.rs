@@ -76,6 +76,7 @@ impl Worker {
         Worker {
             id,
             thread: Some(
+                // NOTE in a production build, thread::Builder, which returns a Result would be preferable
                 thread::spawn(move || loop {
                     let message = receiver.lock().unwrap().recv(); // attempt to wait for a message from the sender, temporary values, like the lock, are dropped when the let statement ends
                     match message {
@@ -89,7 +90,7 @@ impl Worker {
                             break;
                         }
                     }
-                }) // NOTE in a production build, thread::Builder, which returns a Result would be preferable
+                }) 
             )
         }
     }
